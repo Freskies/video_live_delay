@@ -37,6 +37,7 @@ impl DelayApp {
 			_ => "none",
 		};
 
+		// Costruzione pipeline con glupload e glcolorconvert per negoziare correttamente con gtkglsink
 		let pipe = gstreamer::Pipeline::new();
 		let src = gstreamer::ElementFactory::make("libcamerasrc").build().unwrap();
 		let filter1 = gstreamer::ElementFactory::make("capsfilter").build().unwrap();
@@ -71,25 +72,28 @@ fn main() {
 	gtk::init().expect("Inizializzazione GTK fallita");
 	gstreamer::init().expect("Inizializzazione GStreamer fallita");
 
-	// Finestra principale a Schermo Intero
 	let window = gtk::Window::new(gtk::WindowType::Toplevel);
 	window.set_title("Video Live Delay");
 	window.fullscreen();
 
-	// Creazione del sink video hardware integrato in GTK
-	let sink = gstreamer::ElementFactory::make("gtkglsink")
-		.build()
-		.or_else(|_| gstreamer::ElementFactory::make("gtksink").build())
-		.expect("Impossibile creare sink video GTK");
+	// Creazione sink con gestione automatica buffer GL
+	let (sink, video_widget) = if let Ok(gtkgl) = gstreamer::ElementFactory::make("gtkglsink").build() {
+		let glsinkbin = gstreamer::ElementFactory::make("glsinkbin").build().unwrap();
+		glib::ObjectExt::set_property(&glsinkbin, "sink", &gtkgl);
+		let widget: gtk::Widget = glib::ObjectExt::property(&gtkgl, "widget");
+		(glsinkbin, widget)
+	} else {
+		let gtksink = gstreamer::ElementFactory::make("gtksink").build().expect("Nessun sink GTK disponibile");
+		let widget: gtk::Widget = glib::ObjectExt::property(&gtksink, "widget");
+		(gtksink, widget)
+	};
 
-	let video_widget: gtk::Widget = glib::ObjectExt::property(&sink, "widget");
 	video_widget.set_hexpand(true);
 	video_widget.set_vexpand(true);
 
 	let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 	main_box.pack_start(&video_widget, true, true, 0);
 
-	// Barra pulsanti Touch
 	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
 	controls_box.set_margin_top(8);
 	controls_box.set_margin_bottom(8);
