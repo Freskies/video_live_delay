@@ -1,4 +1,3 @@
-use gdk::prelude::*;
 use glib::prelude::*;
 use gstreamer::prelude::*;
 use gstreamer_video::prelude::*;
@@ -39,7 +38,7 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Pipeline fluida a 60 FPS con aggancio hardware diretto al widget GTK
+		// Pipeline accelerata ad alte prestazioni
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -47,28 +46,38 @@ impl DelayApp {
              queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 \
                    min-threshold-buffers={buffer_count} min-threshold-time={delay_ns} ! \
              videoconvert ! \
-             autovideosink sync=false name=vsink"
+             autovideosink sync=false"
 		);
 
 		if let Ok(pipe) = gstreamer::parse_launch(&pipeline_str) {
 			let pipe = pipe.dynamic_cast::<gstreamer::Pipeline>().unwrap();
 
-			// Aggancia il rendering video della GPU direttamente nell'area della finestra GTK
-			if let Some(sink) = pipe.by_name("vsink") {
-				if let Some(gdk_window) = self.drawing_area.window() {
-					let win_handle = gdk_window.downcast_ref::<gdk_x11::GdkX11Window>()
-						.map(|w| w.xid() as usize)
-						.unwrap_or(0);
-
-					if win_handle != 0 {
-						let overlay = sink.dynamic_cast::<gstreamer_video::VideoOverlay>().ok();
-						if let Some(ov) = overlay {
-							unsafe {
-								ov.set_window_handle(win_handle);
+			// Intercetta l'elemento video e inietta la finestra GTK direttamente dal bus
+			if let Some(bus) = pipe.bus() {
+				let area_clone = self.drawing_area.clone();
+				bus.set_sync_handler(move |_bus, msg| {
+					if gstreamer_video::is_video_overlay_prepare_window_handle_message(msg) {
+						if let Some(overlay) = msg.src().and_then(|s| s.dynamic_cast::<gstreamer_video::VideoOverlay>().ok()) {
+							if let Some(window) = area_clone.window() {
+								#[cfg(target_os = "linux")]
+								{
+									use std::os::raw::c_ulong;
+									extern "C" {
+										fn gdk_x11_window_get_xid(window: *mut glib::ffi::GObject) -> c_ulong;
+									}
+									let gdk_ptr = window.as_ref() as *const _ as *mut glib::ffi::GObject;
+									let xid = unsafe { gdk_x11_window_get_xid(gdk_ptr) };
+									if xid != 0 {
+										unsafe {
+											overlay.set_window_handle(xid as usize);
+										}
+									}
+								}
 							}
 						}
 					}
-				}
+					gstreamer::BusSyncReply::Pass
+				});
 			}
 
 			let _ = pipe.set_state(gstreamer::State::Playing);
@@ -87,13 +96,11 @@ fn main() {
 
 	let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-	// Area video nativa espansa al massimo
 	let drawing_area = gtk::DrawingArea::new();
 	drawing_area.set_hexpand(true);
 	drawing_area.set_vexpand(true);
 	main_box.pack_start(&drawing_area, true, true, 0);
 
-	// Barra di controllo Touch integrata in basso
 	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
 	controls_box.set_margin_top(6);
 	controls_box.set_margin_bottom(6);
@@ -127,13 +134,11 @@ fn main() {
 
 	let app_state = Rc::new(RefCell::new(DelayApp::new(drawing_area.clone())));
 
-	// Avvia la pipeline dopo che la finestra grafica è pronta
 	let state_init = app_state.clone();
 	window.connect_map(move |_| {
 		state_init.borrow_mut().restart_pipeline();
 	});
 
-	// Azione Meno
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
@@ -147,7 +152,6 @@ fn main() {
 		});
 	}
 
-	// Azione Più
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
@@ -159,7 +163,6 @@ fn main() {
 		});
 	}
 
-	// Azione Rotazione
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
@@ -171,7 +174,6 @@ fn main() {
 		});
 	}
 
-	// Azione Chiudi
 	{
 		let state = app_state.clone();
 		btn_close.connect_clicked(move |_| {
