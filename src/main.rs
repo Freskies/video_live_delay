@@ -1,4 +1,5 @@
 use glib::prelude::*;
+use glib::translate::ToGlibPtr;
 use gstreamer::prelude::*;
 use gstreamer_video::prelude::*;
 use gtk::prelude::*;
@@ -38,7 +39,7 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Pipeline accelerata ad alte prestazioni
+		// Pipeline hardware accelerata
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -52,7 +53,6 @@ impl DelayApp {
 		if let Ok(pipe) = gstreamer::parse_launch(&pipeline_str) {
 			let pipe = pipe.dynamic_cast::<gstreamer::Pipeline>().unwrap();
 
-			// Intercetta l'elemento video e inietta la finestra GTK direttamente dal bus
 			if let Some(bus) = pipe.bus() {
 				let area_clone = self.drawing_area.clone();
 				bus.set_sync_handler(move |_bus, msg| {
@@ -61,12 +61,12 @@ impl DelayApp {
 							if let Some(window) = area_clone.window() {
 								#[cfg(target_os = "linux")]
 								{
-									use std::os::raw::c_ulong;
+									use std::os::raw::{c_ulong, c_void};
 									extern "C" {
-										fn gdk_x11_window_get_xid(window: *mut glib::ffi::GObject) -> c_ulong;
+										fn gdk_x11_window_get_xid(window: *mut c_void) -> c_ulong;
 									}
-									let gdk_ptr = window.as_ref() as *const _ as *mut glib::ffi::GObject;
-									let xid = unsafe { gdk_x11_window_get_xid(gdk_ptr) };
+									let ptr: *mut c_void = window.to_glib_none().0 as *mut c_void;
+									let xid = unsafe { gdk_x11_window_get_xid(ptr) };
 									if xid != 0 {
 										unsafe {
 											overlay.set_window_handle(xid as usize);
