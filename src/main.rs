@@ -1,5 +1,5 @@
+use glib::prelude::*;
 use gstreamer::prelude::*;
-use gstreamer_video::prelude::*;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,7 +37,6 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Costruzione pipeline con output incapsulato nel sink GTK
 		let pipe = gstreamer::Pipeline::new();
 		let src = gstreamer::ElementFactory::make("libcamerasrc").build().unwrap();
 		let filter1 = gstreamer::ElementFactory::make("capsfilter").build().unwrap();
@@ -50,15 +49,15 @@ impl DelayApp {
 			.field("height", 800)
 			.field("framerate", gstreamer::Fraction::new(60, 1))
 			.build();
-		filter1.set_property("caps", &caps);
+		glib::ObjectExt::set_property(&filter1, "caps", &caps);
 
 		flip.set_property_from_str("method", flip_method);
 
-		queue.set_property("max-size-buffers", 0u32);
-		queue.set_property("max-size-bytes", 0u32);
-		queue.set_property("max-size-time", 0u64);
-		queue.set_property("min-threshold-buffers", buffer_count as u32);
-		queue.set_property("min-threshold-time", delay_ns);
+		glib::ObjectExt::set_property(&queue, "max-size-buffers", 0u32);
+		glib::ObjectExt::set_property(&queue, "max-size-bytes", 0u32);
+		glib::ObjectExt::set_property(&queue, "max-size-time", 0u64);
+		glib::ObjectExt::set_property(&queue, "min-threshold-buffers", buffer_count as u32);
+		glib::ObjectExt::set_property(&queue, "min-threshold-time", delay_ns);
 
 		pipe.add_many([&src, &filter1, &flip, &queue, &conv, &self.video_sink]).unwrap();
 		gstreamer::Element::link_many([&src, &filter1, &flip, &queue, &conv, &self.video_sink]).unwrap();
@@ -78,19 +77,16 @@ fn main() {
 
 	let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-	// Sink video integrabile nella finestra GTK
 	let sink = gstreamer::ElementFactory::make("gtksink")
 		.build()
-		.expect("Plugin gtksink non trovato. Installa gstreamer1.0-plugins-good o gstreamer1.0-gtk3");
+		.expect("Plugin gtksink non trovato. Installa gstreamer1.0-gtk3");
 
-	let widget_val = sink.property::<glib::Value>("widget");
-	let video_widget = widget_val.get::<gtk::Widget>().expect("Impossibile estrarre il widget GTK dal sink");
+	let video_widget: gtk::Widget = glib::ObjectExt::property(&sink, "widget");
 	video_widget.set_hexpand(true);
 	video_widget.set_vexpand(true);
 
 	vbox.pack_start(&video_widget, true, true, 0);
 
-	// Barra dei pulsanti Touch (in basso)
 	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 15);
 	controls_box.set_margin_top(10);
 	controls_box.set_margin_bottom(10);
@@ -100,9 +96,8 @@ fn main() {
 	let btn_minus = gtk::Button::with_label("➖  -1s Delay");
 	btn_minus.set_size_request(160, 60);
 
-	let lbl_status = gtk::Label::new(Some("Delay: 3s | 0°"));
-	let font_desc = pango::FontDescription::from_string("Sans Bold 18");
-	lbl_status.override_font(&font_desc);
+	let lbl_status = gtk::Label::new(None);
+	lbl_status.set_markup("<span font='18' weight='bold'>Delay: 3s | 0°</span>");
 	lbl_status.set_hexpand(true);
 
 	let btn_plus = gtk::Button::with_label("➕  +1s Delay");
@@ -126,7 +121,6 @@ fn main() {
 	let app_state = Rc::new(RefCell::new(DelayApp::new(sink)));
 	app_state.borrow_mut().restart_pipeline();
 
-	// Callback Pulsante Meno
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
@@ -134,37 +128,34 @@ fn main() {
 			let mut app = state.borrow_mut();
 			if app.delay_sec > 1 {
 				app.delay_sec -= 1;
-				lbl.set_text(&format!("Delay: {}s | {}°", app.delay_sec, app.rotation_deg));
+				lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 				app.restart_pipeline();
 			}
 		});
 	}
 
-	// Callback Pulsante Più
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_plus.connect_clicked(move |_| {
 			let mut app = state.borrow_mut();
 			app.delay_sec += 1;
-			lbl.set_text(&format!("Delay: {}s | {}°", app.delay_sec, app.rotation_deg));
+			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 			app.restart_pipeline();
 		});
 	}
 
-	// Callback Pulsante Rotazione
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_rotate.connect_clicked(move |_| {
 			let mut app = state.borrow_mut();
 			app.rotation_deg = (app.rotation_deg + 90) % 360;
-			lbl.set_text(&format!("Delay: {}s | {}°", app.delay_sec, app.rotation_deg));
+			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 			app.restart_pipeline();
 		});
 	}
 
-	// Callback Pulsante Chiudi
 	btn_close.connect_clicked(|_| {
 		gtk::main_quit();
 	});
