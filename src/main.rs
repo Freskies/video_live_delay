@@ -46,7 +46,7 @@ impl DelayApp {
              autovideosink sync=false"
 		);
 
-		if let Ok(pipe) = gstreamer::parse::launch(&pipeline_str) {
+		if let Ok(pipe) = gstreamer::parse_launch(&pipeline_str) {
 			let pipe = pipe.dynamic_cast::<gstreamer::Pipeline>().unwrap();
 			let _ = pipe.set_state(gstreamer::State::Playing);
 			self.pipeline = Some(pipe);
@@ -87,7 +87,7 @@ fn main() {
 	let btn_rotate = gtk::Button::with_label("🔄  Ruota 90°");
 	btn_rotate.set_size_request(150, 50);
 
-	// Bottone chiusura con solo la X grande per touch immediato
+	// Bottone chiusura compatto con solo la X
 	let btn_close = gtk::Button::with_label("✖");
 	btn_close.set_size_request(70, 50);
 
@@ -150,7 +150,7 @@ fn main() {
 
 	window.connect_delete_event(move |_, _| {
 		gtk::main_quit();
-		glib::Propagation::Proceed
+		glib::Propagation::PROCEED
 	});
 
 	window.show_all();
