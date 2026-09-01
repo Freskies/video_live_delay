@@ -10,19 +10,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let delay_seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3);
 
 	println!("==========================================");
-	println!(" Video Delay System (Hardware KMS Direct)");
+	println!(" Video Delay System (Wayland Stream)");
 	println!(" Delay: {} s", delay_seconds);
 	println!("==========================================");
 
 	let delay_ns = delay_seconds * 1_000_000_000;
 	let queue_max_ns = delay_ns + 2_000_000_000;
 
-	// Pipeline hardware KMS a zero-copy:
+	// Pipeline compatibile con il compositor Wayland del Pi
 	let pipeline_str = format!(
 		"libcamerasrc ! \
-			video/x-raw,format=NV12,width=1280,height=720,framerate=60/1 ! \
+			video/x-raw,width=1280,height=720,framerate=60/1 ! \
 			queue min-threshold-time={delay_ns} max-size-time={queue_max_ns} max-size-buffers=0 max-size-bytes=0 ! \
-			kmssink force-modesetting=true sync=false"
+			videoconvert ! \
+			waylandsink sync=false fullscreen=true"
 	);
 
 	let pipeline = gstreamer::parse::launch(&pipeline_str)?;
