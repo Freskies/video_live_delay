@@ -1,11 +1,12 @@
 [package]
 name = "video_live_delay"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-ctrlc = "3.5.2"
-gstreamer = "0.25.3"
-gstreamer-video = "0.25.3"
-gstreamer-app = "0.25.2"
-glib = "0.22.9"
+gtk = "0.18"
+glib = "0.19"
+gstreamer = "0.22"
+gstreamer-video = "0.22"
+ctrlc = "3.4"
+pango = "0.22.9"
