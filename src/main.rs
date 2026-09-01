@@ -1,5 +1,6 @@
+use gdk::prelude::*;
+use gdk::x11::X11Window;
 use glib::prelude::*;
-use glib::translate::ToGlibPtr;
 use gstreamer::prelude::*;
 use gstreamer_video::prelude::*;
 use gtk::prelude::*;
@@ -8,18 +9,18 @@ use std::rc::Rc;
 
 struct DelayApp {
 	pipeline: Option<gstreamer::Pipeline>,
-	drawing_area: gtk::DrawingArea,
 	delay_sec: u64,
 	rotation_deg: u32,
+	window_xid: usize,
 }
 
 impl DelayApp {
-	fn new(drawing_area: gtk::DrawingArea) -> Self {
+	fn new(window_xid: usize) -> Self {
 		Self {
 			pipeline: None,
-			drawing_area,
 			delay_sec: 3,
 			rotation_deg: 0,
+			window_xid,
 		}
 	}
 
@@ -39,7 +40,7 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Pipeline hardware accelerata
+		// Pipeline fluida zero-copy a 60 FPS
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -53,31 +54,20 @@ impl DelayApp {
 		if let Ok(pipe) = gstreamer::parse_launch(&pipeline_str) {
 			let pipe = pipe.dynamic_cast::<gstreamer::Pipeline>().unwrap();
 
-			if let Some(bus) = pipe.bus() {
-				let area_clone = self.drawing_area.clone();
-				bus.set_sync_handler(move |_bus, msg| {
-					if gstreamer_video::is_video_overlay_prepare_window_handle_message(msg) {
-						if let Some(overlay) = msg.src().and_then(|s| s.dynamic_cast::<gstreamer_video::VideoOverlay>().ok()) {
-							if let Some(window) = area_clone.window() {
-								#[cfg(target_os = "linux")]
-								{
-									use std::os::raw::{c_ulong, c_void};
-									extern "C" {
-										fn gdk_x11_window_get_xid(window: *mut c_void) -> c_ulong;
-									}
-									let ptr: *mut c_void = window.to_glib_none().0 as *mut c_void;
-									let xid = unsafe { gdk_x11_window_get_xid(ptr) };
-									if xid != 0 {
-										unsafe {
-											overlay.set_window_handle(xid as usize);
-										}
-									}
+			let target_xid = self.window_xid;
+			if target_xid != 0 {
+				if let Some(bus) = pipe.bus() {
+					bus.set_sync_handler(move |_bus, msg| {
+						if gstreamer_video::is_video_overlay_prepare_window_handle_message(msg) {
+							if let Some(overlay) = msg.src().and_then(|s| s.dynamic_cast::<gstreamer_video::VideoOverlay>().ok()) {
+								unsafe {
+									overlay.set_window_handle(target_xid);
 								}
 							}
 						}
-					}
-					gstreamer::BusSyncReply::Pass
-				});
+						gstreamer::BusSyncReply::Pass
+					});
+				}
 			}
 
 			let _ = pipe.set_state(gstreamer::State::Playing);
@@ -96,11 +86,13 @@ fn main() {
 
 	let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
+	// Area video dedicata espansa a tutto schermo
 	let drawing_area = gtk::DrawingArea::new();
 	drawing_area.set_hexpand(true);
 	drawing_area.set_vexpand(true);
 	main_box.pack_start(&drawing_area, true, true, 0);
 
+	// Barra pulsanti touch in basso
 	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
 	controls_box.set_margin_top(6);
 	controls_box.set_margin_bottom(6);
@@ -132,53 +124,73 @@ fn main() {
 	main_box.pack_end(&controls_box, false, false, 0);
 	window.add(&main_box);
 
-	let app_state = Rc::new(RefCell::new(DelayApp::new(drawing_area.clone())));
+	let app_state = Rc::new(RefCell::new(None::<DelayApp>));
 
-	let state_init = app_state.clone();
-	window.connect_map(move |_| {
-		state_init.borrow_mut().restart_pipeline();
-	});
+	// Estrae l'XID quando la finestra grafica viene mappata a schermo e avvia il video
+	{
+		let app_ref = app_state.clone();
+		let area = drawing_area.clone();
+		window.connect_map(move |_| {
+			let xid = area.window()
+				.and_then(|w| w.downcast::<X11Window>().ok())
+				.map(|w| w.xid() as usize)
+				.unwrap_or(0);
 
+			let mut app = DelayApp::new(xid);
+			app.restart_pipeline();
+			*app_ref.borrow_mut() = Some(app);
+		});
+	}
+
+	// Gestione touch Meno
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_minus.connect_clicked(move |_| {
-			let mut app = state.borrow_mut();
-			if app.delay_sec > 1 {
-				app.delay_sec -= 1;
+			if let Some(ref mut app) = *state.borrow_mut() {
+				if app.delay_sec > 1 {
+					app.delay_sec -= 1;
+					lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+					app.restart_pipeline();
+				}
+			}
+		});
+	}
+
+	// Gestione touch Più
+	{
+		let state = app_state.clone();
+		let lbl = lbl_status.clone();
+		btn_plus.connect_clicked(move |_| {
+			if let Some(ref mut app) = *state.borrow_mut() {
+				app.delay_sec += 1;
 				lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 				app.restart_pipeline();
 			}
 		});
 	}
 
-	{
-		let state = app_state.clone();
-		let lbl = lbl_status.clone();
-		btn_plus.connect_clicked(move |_| {
-			let mut app = state.borrow_mut();
-			app.delay_sec += 1;
-			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
-			app.restart_pipeline();
-		});
-	}
-
+	// Gestione touch Rotazione
 	{
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_rotate.connect_clicked(move |_| {
-			let mut app = state.borrow_mut();
-			app.rotation_deg = (app.rotation_deg + 90) % 360;
-			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
-			app.restart_pipeline();
+			if let Some(ref mut app) = *state.borrow_mut() {
+				app.rotation_deg = (app.rotation_deg + 90) % 360;
+				lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+				app.restart_pipeline();
+			}
 		});
 	}
 
+	// Gestione touch Chiusura
 	{
 		let state = app_state.clone();
 		btn_close.connect_clicked(move |_| {
-			if let Some(pipe) = state.borrow_mut().pipeline.take() {
-				let _ = pipe.set_state(gstreamer::State::Null);
+			if let Some(ref mut app) = *state.borrow_mut() {
+				if let Some(pipe) = app.pipeline.take() {
+					let _ = pipe.set_state(gstreamer::State::Null);
+				}
 			}
 			gtk::main_quit();
 		});
