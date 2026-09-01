@@ -1,11 +1,15 @@
-use gdk::prelude::*;
-use gdk::x11::X11Window;
 use glib::prelude::*;
+use glib::translate::ToGlibPtr;
 use gstreamer::prelude::*;
 use gstreamer_video::prelude::*;
 use gtk::prelude::*;
 use std::cell::RefCell;
+use std::os::raw::{c_ulong, c_void};
 use std::rc::Rc;
+
+extern "C" {
+	fn gdk_x11_window_get_xid(window: *mut c_void) -> c_ulong;
+}
 
 struct DelayApp {
 	pipeline: Option<gstreamer::Pipeline>,
@@ -40,7 +44,7 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Pipeline fluida zero-copy a 60 FPS
+		// Pipeline hardware zero-copy a 60 FPS
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -86,13 +90,11 @@ fn main() {
 
 	let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-	// Area video dedicata espansa a tutto schermo
 	let drawing_area = gtk::DrawingArea::new();
 	drawing_area.set_hexpand(true);
 	drawing_area.set_vexpand(true);
 	main_box.pack_start(&drawing_area, true, true, 0);
 
-	// Barra pulsanti touch in basso
 	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
 	controls_box.set_margin_top(6);
 	controls_box.set_margin_bottom(6);
@@ -126,15 +128,17 @@ fn main() {
 
 	let app_state = Rc::new(RefCell::new(None::<DelayApp>));
 
-	// Estrae l'XID quando la finestra grafica viene mappata a schermo e avvia il video
+	// Estrae l'XID quando la finestra viene mappata a schermo
 	{
 		let app_ref = app_state.clone();
 		let area = drawing_area.clone();
 		window.connect_map(move |_| {
-			let xid = area.window()
-				.and_then(|w| w.downcast::<X11Window>().ok())
-				.map(|w| w.xid() as usize)
-				.unwrap_or(0);
+			let xid = if let Some(gdk_win) = area.window() {
+				let ptr: *mut c_void = gdk_win.as_ref().to_glib_none().0 as *mut c_void;
+				unsafe { gdk_x11_window_get_xid(ptr) as usize }
+			} else {
+				0
+			};
 
 			let mut app = DelayApp::new(xid);
 			app.restart_pipeline();
