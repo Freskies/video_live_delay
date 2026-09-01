@@ -44,7 +44,6 @@ impl DelayApp {
 			_ => "none",
 		};
 
-		// Pipeline hardware zero-copy a 60 FPS
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -63,7 +62,7 @@ impl DelayApp {
 				if let Some(bus) = pipe.bus() {
 					bus.set_sync_handler(move |_bus, msg| {
 						if gstreamer_video::is_video_overlay_prepare_window_handle_message(msg) {
-							if let Some(overlay) = msg.src().and_then(|s| s.dynamic_cast::<gstreamer_video::VideoOverlay>().ok()) {
+							if let Some(overlay) = msg.src().and_then(|s| s.clone().dynamic_cast::<gstreamer_video::VideoOverlay>().ok()) {
 								unsafe {
 									overlay.set_window_handle(target_xid);
 								}
@@ -128,13 +127,12 @@ fn main() {
 
 	let app_state = Rc::new(RefCell::new(None::<DelayApp>));
 
-	// Estrae l'XID quando la finestra viene mappata a schermo
 	{
 		let app_ref = app_state.clone();
 		let area = drawing_area.clone();
 		window.connect_map(move |_| {
 			let xid = if let Some(gdk_win) = area.window() {
-				let ptr: *mut c_void = gdk_win.as_ref().to_glib_none().0 as *mut c_void;
+				let ptr: *mut c_void = gdk_win.to_glib_none().0 as *mut c_void;
 				unsafe { gdk_x11_window_get_xid(ptr) as usize }
 			} else {
 				0
