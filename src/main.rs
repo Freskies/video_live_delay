@@ -1,18 +1,23 @@
+use gdk::prelude::*;
+use glib::prelude::*;
 use gstreamer::prelude::*;
+use gstreamer_video::prelude::*;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-struct DelayEngine {
+struct DelayApp {
 	pipeline: Option<gstreamer::Pipeline>,
+	drawing_area: gtk::DrawingArea,
 	delay_sec: u64,
 	rotation_deg: u32,
 }
 
-impl DelayEngine {
-	fn new() -> Self {
+impl DelayApp {
+	fn new(drawing_area: gtk::DrawingArea) -> Self {
 		Self {
 			pipeline: None,
+			drawing_area,
 			delay_sec: 3,
 			rotation_deg: 0,
 		}
@@ -34,7 +39,7 @@ impl DelayEngine {
 			_ => "none",
 		};
 
-		// Rendering hardware diretto zero-copy: 60 FPS fluidi senza passare per la CPU di GTK
+		// Pipeline fluida a 60 FPS con aggancio hardware diretto al widget GTK
 		let pipeline_str = format!(
 			"libcamerasrc ! \
              video/x-raw,width=1280,height=800,framerate={fps}/1 ! \
@@ -42,11 +47,30 @@ impl DelayEngine {
              queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 \
                    min-threshold-buffers={buffer_count} min-threshold-time={delay_ns} ! \
              videoconvert ! \
-             autovideosink sync=false"
+             autovideosink sync=false name=vsink"
 		);
 
 		if let Ok(pipe) = gstreamer::parse_launch(&pipeline_str) {
 			let pipe = pipe.dynamic_cast::<gstreamer::Pipeline>().unwrap();
+
+			// Aggancia il rendering video della GPU direttamente nell'area della finestra GTK
+			if let Some(sink) = pipe.by_name("vsink") {
+				if let Some(gdk_window) = self.drawing_area.window() {
+					let win_handle = gdk_window.downcast_ref::<gdk_x11::GdkX11Window>()
+						.map(|w| w.xid() as usize)
+						.unwrap_or(0);
+
+					if win_handle != 0 {
+						let overlay = sink.dynamic_cast::<gstreamer_video::VideoOverlay>().ok();
+						if let Some(ov) = overlay {
+							unsafe {
+								ov.set_window_handle(win_handle);
+							}
+						}
+					}
+				}
+			}
+
 			let _ = pipe.set_state(gstreamer::State::Playing);
 			self.pipeline = Some(pipe);
 		}
@@ -57,38 +81,40 @@ fn main() {
 	gtk::init().expect("Inizializzazione GTK fallita");
 	gstreamer::init().expect("Inizializzazione GStreamer fallita");
 
-	let engine = Rc::new(RefCell::new(DelayEngine::new()));
-	engine.borrow_mut().restart_pipeline();
-
-	// Barra OSD Touch: sempre visibile in primo piano sopra il flusso video
 	let window = gtk::Window::new(gtk::WindowType::Toplevel);
-	window.set_title("Delay Controls");
-	window.set_default_size(1280, 80);
-	window.set_position(gtk::WindowPosition::Center);
-	window.set_keep_above(true);
-	window.set_decorated(false); // Nessuna cornice della finestra per un look OSD pulito
+	window.set_title("Video Live Delay");
+	window.fullscreen();
 
-	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 15);
-	controls_box.set_margin_top(10);
-	controls_box.set_margin_bottom(10);
-	controls_box.set_margin_start(20);
-	controls_box.set_margin_end(20);
+	let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+	// Area video nativa espansa al massimo
+	let drawing_area = gtk::DrawingArea::new();
+	drawing_area.set_hexpand(true);
+	drawing_area.set_vexpand(true);
+	main_box.pack_start(&drawing_area, true, true, 0);
+
+	// Barra di controllo Touch integrata in basso
+	let controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+	controls_box.set_margin_top(6);
+	controls_box.set_margin_bottom(6);
+	controls_box.set_margin_start(16);
+	controls_box.set_margin_end(16);
 
 	let btn_minus = gtk::Button::with_label("➖  -1s");
-	btn_minus.set_size_request(150, 60);
+	btn_minus.set_size_request(140, 56);
 
 	let lbl_status = gtk::Label::new(None);
-	lbl_status.set_markup("<span font='20' weight='bold'>Delay: 3s | 0°</span>");
+	lbl_status.set_markup("<span font='18' weight='bold'>Delay: 3s | 0°</span>");
 	lbl_status.set_hexpand(true);
 
 	let btn_plus = gtk::Button::with_label("➕  +1s");
-	btn_plus.set_size_request(150, 60);
+	btn_plus.set_size_request(140, 56);
 
 	let btn_rotate = gtk::Button::with_label("🔄  Ruota 90°");
-	btn_rotate.set_size_request(170, 60);
+	btn_rotate.set_size_request(150, 56);
 
 	let btn_close = gtk::Button::with_label("✖");
-	btn_close.set_size_request(80, 60);
+	btn_close.set_size_request(70, 56);
 
 	controls_box.pack_start(&btn_minus, false, false, 0);
 	controls_box.pack_start(&lbl_status, true, true, 0);
@@ -96,48 +122,60 @@ fn main() {
 	controls_box.pack_start(&btn_rotate, false, false, 0);
 	controls_box.pack_start(&btn_close, false, false, 0);
 
-	window.add(&controls_box);
+	main_box.pack_end(&controls_box, false, false, 0);
+	window.add(&main_box);
 
-	// Eventi Touch
+	let app_state = Rc::new(RefCell::new(DelayApp::new(drawing_area.clone())));
+
+	// Avvia la pipeline dopo che la finestra grafica è pronta
+	let state_init = app_state.clone();
+	window.connect_map(move |_| {
+		state_init.borrow_mut().restart_pipeline();
+	});
+
+	// Azione Meno
 	{
-		let eng = engine.clone();
+		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_minus.connect_clicked(move |_| {
-			let mut app = eng.borrow_mut();
+			let mut app = state.borrow_mut();
 			if app.delay_sec > 1 {
 				app.delay_sec -= 1;
-				lbl.set_markup(&format!("<span font='20' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+				lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 				app.restart_pipeline();
 			}
 		});
 	}
 
+	// Azione Più
 	{
-		let eng = engine.clone();
+		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_plus.connect_clicked(move |_| {
-			let mut app = eng.borrow_mut();
+			let mut app = state.borrow_mut();
 			app.delay_sec += 1;
-			lbl.set_markup(&format!("<span font='20' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 			app.restart_pipeline();
 		});
 	}
 
+	// Azione Rotazione
 	{
-		let eng = engine.clone();
+		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_rotate.connect_clicked(move |_| {
-			let mut app = eng.borrow_mut();
+			let mut app = state.borrow_mut();
 			app.rotation_deg = (app.rotation_deg + 90) % 360;
-			lbl.set_markup(&format!("<span font='20' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
 			app.restart_pipeline();
 		});
 	}
 
+	// Azione Chiudi
 	{
-		let eng = engine.clone();
+		let state = app_state.clone();
 		btn_close.connect_clicked(move |_| {
-			if let Some(pipe) = eng.borrow_mut().pipeline.take() {
+			if let Some(pipe) = state.borrow_mut().pipeline.take() {
 				let _ = pipe.set_state(gstreamer::State::Null);
 			}
 			gtk::main_quit();
