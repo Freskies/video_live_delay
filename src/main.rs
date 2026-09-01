@@ -132,8 +132,8 @@ fn main() {
 		let area = drawing_area.clone();
 		window.connect_map(move |_| {
 			let xid = if let Some(gdk_win) = area.window() {
-				let ptr: *mut c_void = gdk_win.to_glib_none().0 as *mut c_void;
-				unsafe { gdk_x11_window_get_xid(ptr) as usize }
+				let stash = ToGlibPtr::<*mut c_void>::to_glib_none(&gdk_win);
+				unsafe { gdk_x11_window_get_xid(stash.0) as usize }
 			} else {
 				0
 			};
@@ -177,11 +177,10 @@ fn main() {
 		let state = app_state.clone();
 		let lbl = lbl_status.clone();
 		btn_rotate.connect_clicked(move |_| {
-			if let Some(ref mut app) = *state.borrow_mut() {
-				app.rotation_deg = (app.rotation_deg + 90) % 360;
-				lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
-				app.restart_pipeline();
-			}
+			let mut app = state.borrow_mut();
+			app.rotation_deg = (app.rotation_deg + 90) % 360;
+			lbl.set_markup(&format!("<span font='18' weight='bold'>Delay: {}s | {}°</span>", app.delay_sec, app.rotation_deg));
+			app.restart_pipeline();
 		});
 	}
 
