@@ -150,7 +150,7 @@ fn main() {
 
 	window.connect_delete_event(move |_, _| {
 		gtk::main_quit();
-		glib::Propagation::PROCEED
+		glib::Propagation::Proceed
 	});
 
 	window.show_all();
