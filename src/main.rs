@@ -9,9 +9,9 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-// ------------------------------------------------------------
-// CONFIGURAZIONE
-// ------------------------------------------------------------
+// ============================================================
+// CONFIG
+// ============================================================
 
 const FPS: usize = 60;
 const DELAY_SECONDS: usize = 2;
@@ -24,14 +24,11 @@ const ROTATIONS: [gst_video::VideoOrientationMethod; 4] = [
 	gst_video::VideoOrientationMethod::_90l,
 ];
 
-// ------------------------------------------------------------
+// ============================================================
 // ROTAZIONE
-// ------------------------------------------------------------
+// ============================================================
 
-fn rotate_video(
-	video_sink: &gst::Element,
-	rotation_index: &Cell<usize>,
-) {
+fn rotate_video(video_sink: &gst::Element, rotation_index: &Cell<usize>) {
 	let next = (rotation_index.get() + 1) % ROTATIONS.len();
 
 	rotation_index.set(next);
@@ -43,9 +40,9 @@ fn rotate_video(
 	println!("Rotazione: {:?}", rotation);
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // MAIN
-// ------------------------------------------------------------
+// ============================================================
 
 fn main() {
 	gtk::init().expect("Impossibile inizializzare GTK");
@@ -55,21 +52,12 @@ fn main() {
 	println!("Delay: {} secondi", DELAY_SECONDS);
 	println!("Buffer: {} frame", DELAY_FRAMES);
 
-	/*
-	 * Abbiamo due parti della pipeline.
-	 *
-	 * CAPTURE:
-	 *
-	 * camera -> appsink
-	 *
-	 * PLAYBACK:
-	 *
-	 * appsrc -> OpenGL -> gtkglsink
-	 *
-	 * Nel mezzo c'è Rust.
-	 */
-	let pipeline_description = r#"
+	// ========================================================
+	// PIPELINE 1: CAMERA
+	// ========================================================
 
+	let capture_pipeline = gst::parse_launch(
+		r#"
         libcamerasrc !
         video/x-raw,width=1280,height=720,framerate=60/1 !
         appsink
@@ -77,12 +65,30 @@ fn main() {
             sync=false
             max-buffers=2
             drop=true
+        "#,
+	)
+		.expect("Impossibile creare capture pipeline")
+		.downcast::<gst::Pipeline>()
+		.expect("capture_pipeline non è una Pipeline");
 
+	let capture_sink = capture_pipeline
+		.by_name("capture_sink")
+		.expect("capture_sink non trovato")
+		.downcast::<gst_app::AppSink>()
+		.expect("capture_sink non è AppSink");
+
+	// ========================================================
+	// PIPELINE 2: DISPLAY
+	// ========================================================
+
+	let playback_pipeline = gst::parse_launch(
+		r#"
         appsrc
             name=playback_src
             is-live=true
             format=time
             do-timestamp=true
+            block=false
         !
         queue
             max-size-buffers=4
@@ -92,168 +98,126 @@ fn main() {
         !
         glupload !
         glcolorconvert !
-        gtkglsink name=video_sink
-
-    "#;
-
-	let pipeline = gst::parse_launch(pipeline_description)
-		.expect("Impossibile creare la pipeline")
+        gtkglsink
+            name=video_sink
+    "#,
+	)
+		.expect("Impossibile creare playback pipeline")
 		.downcast::<gst::Pipeline>()
-		.expect("L'elemento creato non è una Pipeline");
+		.expect("playback_pipeline non è una Pipeline");
 
-	// ---------------------------------------------------------
-	// ELEMENTI GSTREAMER
-	// ---------------------------------------------------------
-
-	let capture_sink = pipeline
-		.by_name("capture_sink")
-		.expect("capture_sink non trovato")
-		.downcast::<gst_app::AppSink>()
-		.expect("capture_sink non è un AppSink");
-
-	let playback_src = pipeline
+	let playback_src = playback_pipeline
 		.by_name("playback_src")
 		.expect("playback_src non trovato")
 		.downcast::<gst_app::AppSrc>()
-		.expect("playback_src non è un AppSrc");
+		.expect("playback_src non è AppSrc");
 
-	let video_sink = pipeline
+	let video_sink = playback_pipeline
 		.by_name("video_sink")
 		.expect("video_sink non trovato");
 
-	let video_widget =
-		video_sink.property::<gtk::Widget>("widget");
+	let video_widget = video_sink.property::<gtk::Widget>("widget");
 
-	// ---------------------------------------------------------
-	// BUFFER DELAY
-	// ---------------------------------------------------------
+	// ========================================================
+	// DELAY BUFFER
+	// ========================================================
 
 	{
 		let playback_src = playback_src.clone();
 
-		/*
-		 * Questo buffer appartiene al callback.
-		 *
-		 * Con 2 secondi @ 60 FPS conterrà circa 120 frame.
-		 */
-		let mut delay_buffer: VecDeque<gst::Buffer> =
-			VecDeque::with_capacity(DELAY_FRAMES + 2);
+		let mut delay_buffer: VecDeque<gst::Sample> = VecDeque::with_capacity(DELAY_FRAMES + 2);
 
-		let mut caps_configured = false;
+		let mut frame_counter: u64 = 0;
 		let mut playback_started = false;
 
 		capture_sink.set_callbacks(
 			gst_app::AppSinkCallbacks::builder()
 				.new_sample(move |appsink| {
-					// Prende il frame appena arrivato dalla camera.
-					let sample = appsink
-						.pull_sample()
-						.map_err(|_| gst::FlowError::Eos)?;
+					// ----------------------------------------
+					// Riceve il frame dalla camera
+					// ----------------------------------------
 
-					// La prima volta copiamo anche il formato video
-					// dalla camera verso appsrc.
-					if !caps_configured {
-						let caps = sample
-							.caps_owned()
-							.ok_or(gst::FlowError::NotNegotiated)?;
+					let input_sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
 
-						println!("Formato camera: {}", caps);
+					frame_counter += 1;
 
-						playback_src.set_caps(Some(&caps));
+					// Debug: ci permette di sapere immediatamente
+					// se appsink sta ricevendo frame.
+					if frame_counter == 1 {
+						println!("PRIMO FRAME RICEVUTO!");
 
-						caps_configured = true;
+						if let Some(caps) = input_sample.caps() {
+							println!("Caps camera: {}", caps);
+						}
 					}
 
-					let input_buffer = sample
-						.buffer()
-						.ok_or(gst::FlowError::Error)?;
-
-					/*
-					 * IMPORTANTE:
-					 *
-					 * facciamo una vera copia del frame.
-					 *
-					 * Non vogliamo tenere occupato il buffer originale
-					 * appartenente a libcamerasrc/libcamera.
-					 */
-					let owned_buffer = input_buffer
-						.copy_deep()
-						.map_err(|err| {
-							eprintln!(
-								"Errore copia frame: {}",
-								err
-							);
-
-							gst::FlowError::Error
-						})?;
-
-					// Inserisce il nuovo frame in fondo.
-					delay_buffer.push_back(owned_buffer);
-
-					/*
-					 * Finché non abbiamo più di 120 frame,
-					 * non mostriamo niente.
-					 *
-					 * Quindi all'avvio lo schermo resta nero
-					 * per circa 2 secondi.
-					 */
-					if delay_buffer.len() <= DELAY_FRAMES {
-						return Ok(gst::FlowSuccess::Ok);
+					if frame_counter % 60 == 0 {
+						println!(
+							"Frame camera ricevuti: {} | buffer: {}",
+							frame_counter,
+							delay_buffer.len()
+						);
 					}
 
-					/*
-					 * Dopo 2 secondi:
-					 *
-					 * entra frame 121
-					 * esce frame 1
-					 *
-					 * entra frame 122
-					 * esce frame 2
-					 *
-					 * ecc.
-					 */
-					let mut output_buffer = delay_buffer
-						.pop_front()
-						.expect("Delay buffer vuoto");
+					let input_buffer = input_sample.buffer().ok_or(gst::FlowError::Error)?;
 
-					/*
-					 * Il frame conserva il timestamp originale della
-					 * camera.
-					 *
-					 * Lo cancelliamo perché appsrc, con
-					 * do-timestamp=true, gli assegnerà il timestamp
-					 * corrente al momento della riproduzione.
-					 */
+					let caps = input_sample
+						.caps()
+						.ok_or(gst::FlowError::NotNegotiated)?
+						.to_owned();
+
+					let mut copied_buffer = input_buffer.copy_deep().map_err(|err| {
+						eprintln!("Errore copy_deep: {}", err);
+						gst::FlowError::Error
+					})?;
+
 					{
-						let buffer = output_buffer
+						let buffer = copied_buffer
 							.get_mut()
-							.expect("Buffer non modificabile");
+							.expect("Buffer copiato non modificabile");
 
 						buffer.set_pts(None::<gst::ClockTime>);
 						buffer.set_dts(None::<gst::ClockTime>);
 					}
 
+					let stored_sample = gst::Sample::builder()
+						.buffer(&copied_buffer)
+						.caps(&caps)
+						.build();
+
+					delay_buffer.push_back(stored_sample);
+
+					// ----------------------------------------
+					// RIEMPI IL BUFFER
+					// ----------------------------------------
+
+					if delay_buffer.len() <= DELAY_FRAMES {
+						return Ok(gst::FlowSuccess::Ok);
+					}
+
+					// ----------------------------------------
+					// FRAME DI 2 SECONDI FA
+					// ----------------------------------------
+
+					let output_sample = delay_buffer.pop_front().expect("Delay buffer vuoto");
+
 					if !playback_started {
-						println!(
-							"Buffer pieno: playback iniziato con {} s di delay",
-							DELAY_SECONDS
-						);
+						println!();
+						println!("==============================");
+						println!("BUFFER PIENO");
+						println!("Playback avviato con {} secondi di delay", DELAY_SECONDS);
+						println!("==============================");
+						println!();
 
 						playback_started = true;
 					}
 
-					/*
-					 * Reinserisce il vecchio frame nella pipeline
-					 * di visualizzazione.
-					 */
-					if let Err(err) =
-						playback_src.push_buffer(output_buffer)
-					{
-						eprintln!(
-							"Errore appsrc push_buffer: {:?}",
-							err
-						);
-					}
+					// AppSrc::push_sample trasferisce anche i caps.
+					playback_src.push_sample(&output_sample).map_err(|err| {
+						eprintln!("Errore push_sample: {:?}", err);
+
+						err
+					})?;
 
 					Ok(gst::FlowSuccess::Ok)
 				})
@@ -261,15 +225,13 @@ fn main() {
 		);
 	}
 
-	// ---------------------------------------------------------
-	// GTK
-	// ---------------------------------------------------------
+	// ========================================================
+	// INTERFACCIA GTK
+	// ========================================================
 
-	let rotation_index =
-		Rc::new(Cell::new(0usize));
+	let rotation_index = Rc::new(Cell::new(0usize));
 
-	let window =
-		gtk::Window::new(gtk::WindowType::Toplevel);
+	let window = gtk::Window::new(gtk::WindowType::Toplevel);
 
 	window.set_title("Video Live Delay");
 	window.set_default_size(1280, 800);
@@ -278,12 +240,7 @@ fn main() {
 
 	overlay.add(&video_widget);
 
-	// ---------------------------------------------------------
-	// CONTROLLI
-	// ---------------------------------------------------------
-
-	let controls =
-		gtk::Box::new(gtk::Orientation::Horizontal, 10);
+	let controls = gtk::Box::new(gtk::Orientation::Horizontal, 10);
 
 	controls.set_halign(gtk::Align::End);
 	controls.set_valign(gtk::Align::End);
@@ -291,104 +248,106 @@ fn main() {
 	controls.set_margin_end(20);
 	controls.set_margin_bottom(20);
 
-	let rotate_button =
-		gtk::Button::with_label("↻");
+	let rotate_button = gtk::Button::with_label("↻");
 
 	rotate_button.set_size_request(90, 70);
 
-	controls.pack_start(
-		&rotate_button,
-		false,
-		false,
-		0,
-	);
+	controls.pack_start(&rotate_button, false, false, 0);
 
 	overlay.add_overlay(&controls);
 
 	window.add(&overlay);
 
-	// ---------------------------------------------------------
-	// ROTAZIONE TOUCH
-	// ---------------------------------------------------------
+	// ========================================================
+	// ROTAZIONE
+	// ========================================================
 
 	{
 		let video_sink = video_sink.clone();
 		let rotation_index = rotation_index.clone();
 
 		rotate_button.connect_clicked(move |_| {
-			rotate_video(
-				&video_sink,
-				&rotation_index,
-			);
+			rotate_video(&video_sink, &rotation_index);
 		});
 	}
 
-	// ---------------------------------------------------------
+	// ========================================================
 	// TASTIERA
-	// ---------------------------------------------------------
+	// ========================================================
 
 	{
 		let video_sink = video_sink.clone();
 		let rotation_index = rotation_index.clone();
 
-		window.connect_key_press_event(
-			move |_, event| {
-				let key = event.keyval();
+		window.connect_key_press_event(move |_, event| {
+			let key = event.keyval();
 
-				if key
-					== gtk::gdk::keys::constants::Escape
-				{
-					gtk::main_quit();
-				}
+			if key == gtk::gdk::keys::constants::Escape {
+				gtk::main_quit();
+			}
 
-				if key
-					== gtk::gdk::keys::constants::r
-					|| key
-					== gtk::gdk::keys::constants::R
-				{
-					rotate_video(
-						&video_sink,
-						&rotation_index,
-					);
-				}
+			if key == gtk::gdk::keys::constants::r || key == gtk::gdk::keys::constants::R {
+				rotate_video(&video_sink, &rotation_index);
+			}
 
-				glib::Propagation::Proceed
-			},
-		);
+			glib::Propagation::Proceed
+		});
 	}
 
 	window.connect_destroy(|_| {
 		gtk::main_quit();
 	});
 
-	// ---------------------------------------------------------
-	// AVVIO
-	// ---------------------------------------------------------
+	// ========================================================
+	// MOSTRA FINESTRA
+	// ========================================================
 
 	window.show_all();
 	window.fullscreen();
 
-	pipeline
-		.set_state(gst::State::Playing)
-		.expect("Impossibile avviare la pipeline");
+	// ========================================================
+	// AVVIO PIPELINE
+	// ========================================================
 
-	println!("Pipeline PLAYING");
-	println!("1280x720 @ 60 FPS");
-	println!("Delay fisso: {} s", DELAY_SECONDS);
-	println!("R / ↻ = ruota");
-	println!("ESC = esci");
+	/*
+	 * Prima avviamo il display.
+	 *
+	 * Rimarrà semplicemente in attesa del primo sample proveniente
+	 * da appsrc.
+	 */
+	playback_pipeline
+		.set_state(gst::State::Playing)
+		.expect("Impossibile avviare playback pipeline");
+
+	println!("Playback pipeline avviata");
+
+	/*
+	 * Poi avviamo la camera.
+	 */
+	capture_pipeline
+		.set_state(gst::State::Playing)
+		.expect("Impossibile avviare capture pipeline");
+
+	println!("Capture pipeline avviata");
+	println!("In attesa di {} frame...", DELAY_FRAMES);
 
 	gtk::main();
 
-	// ---------------------------------------------------------
+	// ========================================================
 	// ARRESTO
-	// ---------------------------------------------------------
+	// ========================================================
 
-	println!("Arresto pipeline...");
+	println!("Arresto camera...");
 
-	pipeline
+	capture_pipeline
 		.set_state(gst::State::Null)
-		.expect("Impossibile arrestare la pipeline");
+		.expect("Errore arresto capture pipeline");
+
+	println!("Arresto display...");
+
+	playback_pipeline
+		.set_state(gst::State::Null)
+		.expect("Errore arresto playback pipeline");
 
 	println!("Terminato");
 }
