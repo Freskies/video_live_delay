@@ -1,4 +1,5 @@
 use gstreamer as gst;
+use gstreamer_video as gst_video;
 
 use gst::prelude::*;
 use gtk::prelude::*;
@@ -6,31 +7,12 @@ use gtk::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
-const ROTATIONS: [&str; 4] = [
-	"identity",
-	"90r",
-	"180",
-	"90l",
+const ROTATIONS: [gst_video::VideoOrientationMethod; 4] = [
+	gst_video::VideoOrientationMethod::Identity,
+	gst_video::VideoOrientationMethod::_90r,
+	gst_video::VideoOrientationMethod::_180,
+	gst_video::VideoOrientationMethod::_90l,
 ];
-
-fn set_enum_property_by_nick(
-	element: &gst::Element,
-	property: &str,
-	nick: &str,
-) {
-	let property_type = element
-		.property_type(property)
-		.expect("Proprietà GStreamer non trovata");
-
-	let enum_class = glib::EnumClass::new(property_type)
-		.expect("La proprietà non è un enum");
-
-	let value = enum_class
-		.to_value_by_nick(nick)
-		.expect("Valore enum non valido");
-
-	element.set_property_from_value(property, &value);
-}
 
 fn rotate_video(
 	video_sink: &gst::Element,
@@ -42,13 +24,9 @@ fn rotate_video(
 
 	let rotation = ROTATIONS[next];
 
-	set_enum_property_by_nick(
-		video_sink,
-		"rotate-method",
-		rotation,
-	);
+	video_sink.set_property("rotate-method", rotation);
 
-	println!("Rotazione: {}", rotation);
+	println!("Rotazione: {:?}", rotation);
 }
 
 fn main() {
@@ -60,7 +38,8 @@ fn main() {
 
 	println!("Avvio Video Live Delay...");
 
-	// Pipeline video stabile verificata sul Raspberry Pi.
+	// Pipeline verificata sul Raspberry Pi:
+	// 1280x720 @ 60 FPS, fluida e con rendering OpenGL.
 	let pipeline_description = r#"
         libcamerasrc !
         video/x-raw,width=1280,height=720,framerate=60/1 !
@@ -82,19 +61,15 @@ fn main() {
 	let video_widget =
 		video_sink.property::<gtk::Widget>("widget");
 
-	/*
-	 * Stato della rotazione.
-	 *
-	 * 0 = identity
-	 * 1 = 90r
-	 * 2 = 180
-	 * 3 = 90l
-	 */
+	// 0 = 0°
+	// 1 = 90°
+	// 2 = 180°
+	// 3 = 270°
 	let rotation_index =
 		Rc::new(Cell::new(0usize));
 
 	// ---------------------------------------------------------
-	// INTERFACCIA
+	// FINESTRA
 	// ---------------------------------------------------------
 
 	let window =
@@ -103,17 +78,16 @@ fn main() {
 	window.set_title("Video Live Delay");
 	window.set_default_size(1280, 800);
 
-	/*
-	 * Overlay:
-	 *
-	 * video sotto
-	 * controlli sopra
-	 */
+	// Overlay:
+	// video sotto, controlli sopra.
 	let overlay = gtk::Overlay::new();
 
 	overlay.add(&video_widget);
 
-	// Barra dei controlli.
+	// ---------------------------------------------------------
+	// BARRA CONTROLLI
+	// ---------------------------------------------------------
+
 	let controls = gtk::Box::new(
 		gtk::Orientation::Horizontal,
 		10,
@@ -125,11 +99,9 @@ fn main() {
 	controls.set_margin_end(20);
 	controls.set_margin_bottom(20);
 
-	// Pulsante rotazione.
 	let rotate_button =
 		gtk::Button::with_label("↻");
 
-	// Abbastanza grande per il touchscreen.
 	rotate_button.set_size_request(90, 70);
 
 	controls.pack_start(
@@ -174,14 +146,12 @@ fn main() {
 
 				let key = event.keyval();
 
-				// ESC = chiudi
 				if key
 					== gtk::gdk::keys::constants::Escape
 				{
 					gtk::main_quit();
 				}
 
-				// R = ruota
 				if key
 					== gtk::gdk::keys::constants::r
 					|| key
@@ -215,8 +185,8 @@ fn main() {
 
 	println!("Pipeline avviata");
 	println!("1280x720 @ 60 FPS");
-	println!("R / pulsante ↻ = rotazione");
-	println!("ESC = uscita");
+	println!("R / ↻ = ruota");
+	println!("ESC = esci");
 
 	gtk::main();
 
