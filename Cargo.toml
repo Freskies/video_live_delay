@@ -5,8 +5,5 @@ edition = "2021"
 
 [dependencies]
 gtk = "0.18"
-gdk = "0.18"
 glib = "0.18"
 gstreamer = "0.21"
-gstreamer-video = "0.21"
-ctrlc = "3.4"
