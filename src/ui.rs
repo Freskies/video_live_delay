@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use gstreamer as gst;
 use gstreamer_video as gst_video;
-
 use gtk::prelude::*;
+use gtk::GestureLongPress;
 
 use crate::delay::DelayController;
 
@@ -85,10 +85,11 @@ pub fn build_window(
 	delay_label.set_widget_name("delay-label");
 	controls.pack_start(&delay_label, false, false, 0);
 
-	let shutdown_button = gtk::Button::with_label("⏻");
+	let shutdown_button =
+		gtk::Button::from_icon_name(Some("system-shutdown-symbolic"), gtk::IconSize::Button);
 	shutdown_button.set_widget_name("shutdown-button");
 	shutdown_button.set_size_request(90, 70);
-	setup_shutdown_button(&shutdown_button);
+	let shutdown_gesture: GestureLongPress = setup_shutdown_button(&shutdown_button);
 	controls.pack_start(&shutdown_button, false, false, 0);
 
 	overlay.add_overlay(&controls);
@@ -127,50 +128,33 @@ pub fn build_window(
 	}
 
 	window.connect_destroy(|_| {
+		let _keep_alive = &shutdown_gesture;
 		gtk::main_quit();
 	});
 
 	window
 }
 
-fn setup_shutdown_button(button: &gtk::Button) {
-	let holding = Rc::new(Cell::new(false));
-	let press_id = Rc::new(Cell::new(0u64));
-
-	// Start pressing
-	{
-		let holding = holding.clone();
-		let press_id = press_id.clone();
-
-		button.connect_pressed(move |_| {
-			holding.set(true);
-
-			let current_id = press_id.get() + 1;
-			press_id.set(current_id);
-
-			let holding = holding.clone();
-			let press_id = press_id.clone();
-
-			gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
-				if holding.get() && press_id.get() == current_id {
-					println!("Shutdown requested");
-					let result = Command::new("systemctl").arg("poweroff").spawn();
-					if let Err(err) = result {
-						eprintln!("Unable to shut down: {}", err);
-					}
-				}
-			});
-		});
+fn setup_shutdown_button(button: &gtk::Button) -> GestureLongPress {
+	if let Some(settings) = gtk::Settings::default() {
+		settings.set_property("gtk-long-press-time", 1000u32);
 	}
 
-	// Stop pressing before shutdown
-	{
-		let holding = holding.clone();
-		let press_id = press_id.clone();
+	let gesture = GestureLongPress::new(button);
+	gesture.set_delay_factor(2.0);
 
-		button.connect_released(move |_| {
-			holding.set(false);
-			press_id.set(press_id.get() + 1);
-		});
-	}
+	gesture.connect_pressed(|_, _, _| {
+		println!("Shutdown requested");
+
+		match Command::new("systemctl").arg("poweroff").spawn() {
+			Ok(_) => {
+				println!("Poweroff command sent");
+			}
+			Err(err) => {
+				eprintln!("Unable to shut down: {}", err);
+			}
+		}
+	});
+
+	gesture
 }
