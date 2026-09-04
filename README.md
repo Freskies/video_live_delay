@@ -16,24 +16,6 @@ The camera captures continuously at 60 FPS while the application keeps a short h
 The video is not compressed because I am a garbage programmer and didn't know how to do it. If you're able you can
 contribute to the project! Otherwise, I suggest sticking to at least 4GB of RAM.
 
-## Features
-
-(Written by AI but (not carefully) reviewed by me)
-
-- Live camera capture at **1280×720 @ 60 FPS**
-- Configurable video delay
-- Delay shown directly in the interface
-- Touchscreen controls to increase or decrease the delay
-- GPU-accelerated video rendering
-- GPU-accelerated 0° / 90° / 180° / 270° rotation
-- Fullscreen GTK interface
-- Designed to run locally without an Internet connection
-- Written in **Rust**
-- Built on **GStreamer**, **GTK 3**, **libcamera**, and **OpenGL**
-- Open source under the **GNU GPL v3 or later**
-
-The current design targets delays up to approximately **15 seconds** on a Raspberry Pi with 4 GB of RAM.
-
 ## Hardware used for development
 
 This project is being developed and tested with the following hardware:
