@@ -1,8 +1,5 @@
-use std::collections::VecDeque;
-
 use gstreamer as gst;
-
-use gst::prelude::*;
+use std::collections::VecDeque;
 
 pub struct VideoBuffer {
 	history: VecDeque<gst::Sample>,

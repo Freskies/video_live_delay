@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::process::Command;
 use std::rc::Rc;
-use std::time::Duration;
 
 use gstreamer as gst;
 use gstreamer_video as gst_video;
@@ -89,7 +88,6 @@ pub fn build_window(
 		gtk::Button::from_icon_name(Some("system-shutdown-symbolic"), gtk::IconSize::Button);
 	shutdown_button.set_widget_name("shutdown-button");
 	shutdown_button.set_size_request(90, 70);
-	let shutdown_gesture: GestureLongPress = setup_shutdown_button(&shutdown_button);
 	controls.pack_start(&shutdown_button, false, false, 0);
 
 	overlay.add_overlay(&controls);
@@ -127,7 +125,8 @@ pub fn build_window(
 		});
 	}
 
-	window.connect_destroy(|_| {
+	let shutdown_gesture: GestureLongPress = setup_shutdown_button(&shutdown_button);
+	window.connect_destroy(move |_| {
 		let _keep_alive = &shutdown_gesture;
 		gtk::main_quit();
 	});
