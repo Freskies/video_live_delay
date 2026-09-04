@@ -2,10 +2,10 @@
 name = "video_live_delay"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 gtk = "0.18"
-glib = "0.18"
 gstreamer = "0.21"
 gstreamer-video = "0.21"
 gstreamer-app = "0.21"
