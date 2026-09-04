@@ -17,3 +17,7 @@ button {
 	min-width: 72px;
 	min-height: 60px;
 }
+
+#shutdown-button {
+	font-size: 30px;
+}

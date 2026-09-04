@@ -1,5 +1,7 @@
 use std::cell::Cell;
+use std::process::Command;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gstreamer as gst;
 use gstreamer_video as gst_video;
@@ -62,22 +64,32 @@ pub fn build_window(
 	overlay.add(&video_widget);
 
 	let controls = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-	let minus_button = gtk::Button::with_label("−");
-	let plus_button = gtk::Button::with_label("+");
-	let rotate_button = gtk::Button::with_label("↻");
-	let delay_label = gtk::Label::new(Some(&delay.display_text()));
 	controls.set_widget_name("controls");
 	controls.set_halign(gtk::Align::Center);
 	controls.set_valign(gtk::Align::End);
 	controls.set_margin_bottom(20);
-	delay_label.set_widget_name("delay-label");
+
+	let minus_button = gtk::Button::with_label("−");
 	minus_button.set_size_request(90, 70);
-	plus_button.set_size_request(90, 70);
-	rotate_button.set_size_request(90, 70);
 	controls.pack_start(&minus_button, false, false, 0);
-	controls.pack_start(&delay_label, false, false, 0);
+
+	let plus_button = gtk::Button::with_label("+");
+	plus_button.set_size_request(90, 70);
 	controls.pack_start(&plus_button, false, false, 0);
+
+	let rotate_button = gtk::Button::with_label("↻");
+	rotate_button.set_size_request(90, 70);
 	controls.pack_start(&rotate_button, false, false, 0);
+
+	let delay_label = gtk::Label::new(Some(&delay.display_text()));
+	delay_label.set_widget_name("delay-label");
+	controls.pack_start(&delay_label, false, false, 0);
+
+	let shutdown_button = gtk::Button::with_label("⏻");
+	shutdown_button.set_widget_name("shutdown-button");
+	shutdown_button.set_size_request(90, 70);
+	setup_shutdown_button(&shutdown_button);
+	controls.pack_start(&shutdown_button, false, false, 0);
 
 	overlay.add_overlay(&controls);
 	window.add(&overlay);
@@ -119,4 +131,46 @@ pub fn build_window(
 	});
 
 	window
+}
+
+fn setup_shutdown_button(button: &gtk::Button) {
+	let holding = Rc::new(Cell::new(false));
+	let press_id = Rc::new(Cell::new(0u64));
+
+	// Start pressing
+	{
+		let holding = holding.clone();
+		let press_id = press_id.clone();
+
+		button.connect_pressed(move |_| {
+			holding.set(true);
+
+			let current_id = press_id.get() + 1;
+			press_id.set(current_id);
+
+			let holding = holding.clone();
+			let press_id = press_id.clone();
+
+			gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
+				if holding.get() && press_id.get() == current_id {
+					println!("Shutdown requested");
+					let result = Command::new("systemctl").arg("poweroff").spawn();
+					if let Err(err) = result {
+						eprintln!("Unable to shut down: {}", err);
+					}
+				}
+			});
+		});
+	}
+
+	// Stop pressing before shutdown
+	{
+		let holding = holding.clone();
+		let press_id = press_id.clone();
+
+		button.connect_released(move |_| {
+			holding.set(false);
+			press_id.set(press_id.get() + 1);
+		});
+	}
 }
