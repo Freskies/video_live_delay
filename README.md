@@ -136,6 +136,35 @@ gstreamer-app = "0.21"
 
 These versions are intentionally kept on compatible GTK/GLib/GStreamer Rust binding generations.
 
+## Shutdown button permissions
+
+The touchscreen shutdown button uses:
+
+```bash
+systemctl poweroff
+```
+
+To allow your user to power off the device without entering a password, create:
+
+```bash
+sudo nano /etc/polkit-1/rules.d/49-video-live-delay.rules
+```
+
+with:
+
+```javascript
+polkit.addRule(function (action, subject) {
+   if (
+      action.id == "org.freedesktop.login1.power-off" &&
+      subject.user == "<username>"
+   ) {
+      return polkit.Result.YES;
+   }
+});
+```
+
+restart your system and you should be fine.
+
 ## Build
 
 Clone the repository and enter the project directory:
